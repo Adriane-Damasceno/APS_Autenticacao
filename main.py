@@ -6,305 +6,289 @@ from tkinter import ttk, messagebox
 from typing import Dict, Any, Optional, Tuple
 import cv2
 import numpy as np
-from PIL import Image, ImageTk, ImageOps
+from PIL import Image, ImageTk
+import os
 
 
 class FacialAuthSystem:
     def __init__(self) -> None:
         self.root = tk.Tk()
-        self.root.title("Sistema de Autenticação Avançado")
-        self.root.geometry("900x700")
-        self.root.configure(bg='#2c3e50')
-        self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
+        self.root.title("Sistema de Autenticação - MMA")
+        self.root.geometry("1000x700")
+        self.root.configure(bg='#21402b')
 
-        # Centralizar a janela na tela
+        # Centralizar a janela
         self.center_window()
 
-        # Configurar estilo personalizado
+        # Configurar estilo
         self.setup_custom_style()
 
         # Dados de usuários
         self.users: Dict[str, Dict[str, Any]] = {
-            "funcionario": {"password": "func123", "level": 0},
-            "admin": {"password": "admin123", "level": 2},
-            "user1": {"password": "senha1", "level": 1},
-            "user2": {"password": "senha2", "level": 1}
+            "funcionario": {"password": "123func", "level": 1, "name": "Funcionário"},
+            "diretor": {"password": "123dir", "level": 2, "name": "Diretor de Divisão"},
+            "admin": {"password": "123admin", "level": 3, "name": "Ministro"},
+            "usuario1": {"password": "senha1", "level": 1, "name": "Analista Ambiental"},
+            "usuario2": {"password": "senha2", "level": 1, "name": "Técnico Ambiental"}
         }
 
-        # Variáveis para captura de vídeo
+        # =============================================================================
+        # CONFIGURAÇÃO DA FOTO DO ADMINISTRADOR
+        # =============================================================================
+        self.admin_photo_path = "teste.jpg"  # DEIXE VAZIO PARA TESTE INICIAL
+        self.admin_face_features = None
+        # =============================================================================
+
+        # Inicializar variáveis da câmera
         self.cap: Optional[cv2.VideoCapture] = None
         self.capturing: bool = False
         self.current_frame: Optional[np.ndarray] = None
         self.video_thread: Optional[threading.Thread] = None
 
-        # Carregar o classificador Haar Cascade
-        cascade_path = Path(cv2.data.haarcascades) / 'haarcascade_frontalface_default.xml'
-        self.face_cascade = cv2.CascadeClassifier(str(cascade_path))
+        # Carregar classificador de faces
+        self.face_cascade = None
+        self.load_face_cascade()
+
+        # Carregar características faciais do admin se a foto existir
+        if self.admin_photo_path and os.path.exists(self.admin_photo_path):
+            self.load_admin_face_features()
 
         self.show_login_screen()
+
+    def load_face_cascade(self) -> None:
+        """Carrega o classificador de faces do OpenCV"""
+        try:
+            cascade_path = Path(cv2.data.haarcascades) / 'haarcascade_frontalface_default.xml'
+            self.face_cascade = cv2.CascadeClassifier(str(cascade_path))
+            if self.face_cascade.empty():
+                raise Exception("Classificador de faces não carregado")
+            print("Classificador de faces carregado com sucesso!")
+        except Exception as e:
+            print(f"Erro ao carregar classificador: {e}")
+            self.face_cascade = None
+
+    def load_admin_face_features(self) -> None:
+        """Carrega as características faciais do administrador usando OpenCV"""
+        try:
+            if self.face_cascade is None:
+                raise Exception("Classificador de faces não disponível")
+
+            # Carregar imagem do admin
+            admin_image = cv2.imread(self.admin_photo_path)
+            if admin_image is None:
+                raise Exception(f"Não foi possível carregar a imagem: {self.admin_photo_path}")
+
+            # Converter para escala de cinza
+            gray = cv2.cvtColor(admin_image, cv2.COLOR_BGR2GRAY)
+
+            # Detectar rostos
+            faces = self.face_cascade.detectMultiScale(gray, 1.1, 4, minSize=(100, 100))
+
+            if len(faces) > 0:
+                x, y, w, h = faces[0]
+                # Recortar o rosto
+                face_roi = gray[y:y + h, x:x + w]
+
+                # Extrair características simples
+                features = self.extract_face_features(face_roi)
+                self.admin_face_features = features
+                print("Características faciais do admin carregadas com sucesso!")
+                print(f"Rosto detectado: {x}, {y}, {w}, {h}")
+            else:
+                print("Nenhum rosto detectado na foto do administrador")
+                self.admin_face_features = None
+
+        except Exception as e:
+            print(f"Erro ao carregar foto do admin: {e}")
+            self.admin_face_features = None
+
+    def extract_face_features(self, face_image: np.ndarray) -> Dict[str, Any]:
+        """Extrai características simples do rosto usando OpenCV"""
+        try:
+            # Redimensionar para tamanho padrão
+            face_standard = cv2.resize(face_image, (100, 100))
+
+            # Calcular histograma normalizado
+            hist = cv2.calcHist([face_standard], [0], None, [256], [0, 256])
+            hist = cv2.normalize(hist, hist).flatten()
+
+            # Calcar características de textura (LBP simples)
+            lbp_features = self.calculate_texture_features(face_standard)
+
+            return {
+                'histogram': hist,
+                'texture': lbp_features,
+                'face_standard': face_standard
+            }
+        except Exception as e:
+            print(f"Erro ao extrair características: {e}")
+            return {}
+
+    def calculate_texture_features(self, image: np.ndarray) -> np.ndarray:
+        """Calcula características de textura simples"""
+        # Usar filtros simples para textura
+        sobelx = cv2.Sobel(image, cv2.CV_64F, 1, 0, ksize=3)
+        sobely = cv2.Sobel(image, cv2.CV_64F, 0, 1, ksize=3)
+
+        # Calcular magnitude do gradiente
+        gradient_magnitude = np.sqrt(sobelx ** 2 + sobely ** 2)
+        gradient_magnitude = cv2.normalize(gradient_magnitude, None, 0, 255, cv2.NORM_MINMAX)
+
+        return gradient_magnitude.flatten()
+
+    def compare_faces(self, features1: Dict[str, Any], features2: Dict[str, Any]) -> float:
+        """Compara duas faces baseado em suas características"""
+        try:
+            if not features1 or not features2:
+                return 0.0
+
+            # Comparar histogramas usando correlação
+            hist_corr = cv2.compareHist(features1['histogram'], features2['histogram'], cv2.HISTCMP_CORREL)
+
+            # Converter para valor entre 0 e 1
+            hist_similarity = max(0.0, (hist_corr + 1) / 2.0)
+
+            # Comparação simples de textura (correlação entre gradientes)
+            if 'texture' in features1 and 'texture' in features2:
+                texture_corr = np.corrcoef(features1['texture'], features2['texture'])[0, 1]
+                if np.isnan(texture_corr):
+                    texture_similarity = 0.0
+                else:
+                    texture_similarity = max(0.0, texture_corr)
+            else:
+                texture_similarity = 0.5  # Valor neutro se não houver textura
+
+            # Combinação ponderada
+            similarity = (hist_similarity * 0.7) + (texture_similarity * 0.3)
+
+            return similarity
+        except Exception as e:
+            print(f"Erro na comparação: {e}")
+            return 0.0
 
     def center_window(self) -> None:
         """Centraliza a janela na tela"""
         self.root.update_idletasks()
-        width = 900
+        width = 1000
         height = 700
         x = (self.root.winfo_screenwidth() // 2) - (width // 2)
         y = (self.root.winfo_screenheight() // 2) - (height // 2)
         self.root.geometry(f'{width}x{height}+{x}+{y}')
 
     def setup_custom_style(self) -> None:
-        """Configura estilos personalizados para a aplicação"""
+        """Configura estilos personalizados"""
         style = ttk.Style()
         style.theme_use('clam')
 
         self.colors = {
-            'primary': '#3498db',
-            'secondary': '#2c3e50',
+            'primary': '#3ad631',
+            'secondary': '##21402b',
             'success': '#27ae60',
             'warning': '#f39c12',
             'danger': '#e74c3c',
-            'light': '#ecf0f1',
-            'dark': '#34495e',
-            'background': '#2c3e50',
-            'card_bg': '#34495e'
+            'background': '#21402b',
+            'card_bg': '#345c32',
+            'header_bg': '#162616'
         }
 
-        style.configure('Custom.TFrame', background=self.colors['background'])
-        style.configure('Card.TFrame', background=self.colors['card_bg'], relief='raised', borderwidth=2)
-        style.configure('Center.TFrame', background=self.colors['background'])
-
-        style.configure('Primary.TButton',
-                        background=self.colors['primary'],
-                        foreground='white',
-                        focuscolor='none',
-                        borderwidth=0,
-                        focusthickness=0,
-                        padding=(20, 10))
-        style.map('Primary.TButton',
-                  background=[('active', '#2980b9'), ('pressed', '#21618c')])
-
-        style.configure('Secondary.TButton',
-                        background=self.colors['dark'],
-                        foreground='white',
-                        borderwidth=0,
-                        padding=(15, 8))
-        style.map('Secondary.TButton',
-                  background=[('active', '#2c3e50'), ('pressed', '#1a252f')])
-
-        style.configure('Title.TLabel',
-                        background=self.colors['background'],
-                        foreground=self.colors['light'],
-                        font=('Arial', 20, 'bold'))
-
-        style.configure('Subtitle.TLabel',
-                        background=self.colors['background'],
-                        foreground=self.colors['primary'],
-                        font=('Arial', 14))
-
-        style.configure('Normal.TLabel',
-                        background=self.colors['card_bg'],
-                        foreground=self.colors['light'],
-                        font=('Arial', 11))
-
-        style.configure('Custom.TEntry',
-                        fieldbackground=self.colors['light'],
-                        foreground=self.colors['dark'],
-                        borderwidth=2,
-                        focusthickness=2,
-                        focuscolor=self.colors['primary'])
-
-        style.configure('Custom.TLabelframe',
-                        background=self.colors['background'],
-                        foreground=self.colors['light'])
-        style.configure('Custom.TLabelframe.Label',
-                        background=self.colors['background'],
-                        foreground=self.colors['primary'])
-
-    def on_closing(self) -> None:
-        """Método chamado ao fechar a aplicação"""
-        self.capturing = False
-        if self.cap and self.cap.isOpened():
-            self.cap.release()
-        self.root.destroy()
-
     def show_login_screen(self) -> None:
-        """Exibe a tela de login principal com campos"""
-        # Limpar a tela anterior
+        """Tela de login principal"""
+        self.stop_camera()
+
         for widget in self.root.winfo_children():
             widget.destroy()
 
-        # Frame principal
-        main_frame = ttk.Frame(self.root, style='Custom.TFrame', padding="40")
-        main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        # Cabeçalho
+        header_frame = tk.Frame(self.root, bg=self.colors['header_bg'], height=80)
+        header_frame.pack(fill=tk.X)
+        header_frame.pack_propagate(False)
 
-        # Configurar pesos para centralização
-        self.root.columnconfigure(0, weight=1)
-        self.root.rowconfigure(0, weight=1)
-        main_frame.columnconfigure(0, weight=1)
-        main_frame.columnconfigure(1, weight=1)
-        main_frame.columnconfigure(2, weight=1)  # Coluna extra para centralização
-        main_frame.rowconfigure(0, weight=1)
-        main_frame.rowconfigure(1, weight=0)  # Conteúdo principal
-        main_frame.rowconfigure(2, weight=1)
-        main_frame.rowconfigure(3, weight=1)
+        tk.Label(
+            header_frame,
+            text="Ministério do Meio Ambiente",
+            font=("Arial", 16, "bold"),
+            bg=self.colors['header_bg'],
+            fg='white'
+        ).pack(pady=20)
+
+        main_frame = ttk.Frame(self.root, padding="40")
+        main_frame.pack(fill=tk.BOTH, expand=True)
 
         # Título
-        title_frame = ttk.Frame(main_frame, style='Custom.TFrame')
-        title_frame.grid(row=0, column=0, columnspan=3, pady=(20, 10), sticky=(tk.W, tk.E))
-        title_frame.columnconfigure(0, weight=1)
-
-        ttk.Label(
-            title_frame,
-            text="🔐 ",
-            font=("Arial", 24),
-            background=self.colors['background'],
-            foreground=self.colors['primary']
-        ).grid(row=0, column=0)
-
-        ttk.Label(
-            title_frame,
-            text="Sistema de Autenticação",
-            style='Title.TLabel'
-        ).grid(row=1, column=0, pady=5)
-
-        ttk.Label(
-            title_frame,
-            text="Acesso Seguro",
-            style='Subtitle.TLabel'
-        ).grid(row=2, column=0, pady=5)
-
-        # Container central para o card de login
-        center_container = ttk.Frame(main_frame, style='Center.TFrame')
-        center_container.grid(row=1, column=1, sticky=(tk.W, tk.E, tk.N, tk.S), pady=20)
-        center_container.columnconfigure(0, weight=1)
+        title_label = tk.Label(
+            main_frame,
+            text="Sistema de Monitoramento Ambiental",
+            font=("Arial", 20, "bold"),
+            bg=self.colors['background'],
+            fg='white'
+        )
+        title_label.pack(pady=20)
 
         # Card de login
-        login_card = ttk.Frame(center_container, style='Card.TFrame', padding="30")
-        login_card.grid(row=0, column=0, sticky=(tk.W, tk.E), padx=50)
-        login_card.columnconfigure(0, weight=1)
+        login_card = tk.Frame(main_frame, bg=self.colors['card_bg'], relief='raised', bd=2)
+        login_card.pack(pady=20, padx=100, fill=tk.X)
 
         # Campo de login
-        ttk.Label(
+        tk.Label(
             login_card,
             text="Usuário:",
-            style='Normal.TLabel',
-            font=('Arial', 12, 'bold')
-        ).grid(row=0, column=0, sticky=tk.W, pady=(0, 10))
+            font=("Arial", 12, "bold"),
+            bg=self.colors['card_bg'],
+            fg='white'
+        ).pack(anchor=tk.W, pady=(20, 5), padx=20)
 
-        self.login_entry = ttk.Entry(
-            login_card,
-            font=("Arial", 12),
-            width=25,
-            style='Custom.TEntry'
-        )
-        self.login_entry.grid(row=1, column=0, sticky=(tk.W, tk.E), pady=(0, 20))
+        self.login_entry = tk.Entry(login_card, font=("Arial", 12), width=30)
+        self.login_entry.pack(fill=tk.X, pady=5, padx=20)
 
         # Campo de senha
-        ttk.Label(
+        tk.Label(
             login_card,
             text="Senha:",
-            style='Normal.TLabel',
-            font=('Arial', 12, 'bold')
-        ).grid(row=2, column=0, sticky=tk.W, pady=(0, 10))
+            font=("Arial", 12, "bold"),
+            bg=self.colors['card_bg'],
+            fg='white'
+        ).pack(anchor=tk.W, pady=(20, 5), padx=20)
 
-        self.password_entry = ttk.Entry(
-            login_card,
-            font=("Arial", 12),
-            show="•",
-            width=25,
-            style='Custom.TEntry'
-        )
-        self.password_entry.grid(row=3, column=0, sticky=(tk.W, tk.E), pady=(0, 30))
+        self.password_entry = tk.Entry(login_card, font=("Arial", 12), show="•", width=30)
+        self.password_entry.pack(fill=tk.X, pady=5, padx=20)
 
-        # Botão de autenticação
-        login_button = ttk.Button(
+        # Botão de login
+        login_button = tk.Button(
             login_card,
-            text="🔓 ENTRAR NO SISTEMA",
+            text="ENTRAR",
             command=self.standard_auth,
-            style='Primary.TButton'
+            bg=self.colors['primary'],
+            fg='white',
+            font=("Arial", 12, "bold"),
+            relief='flat',
+            padx=20,
+            pady=10
         )
-        login_button.grid(row=4, column=0, sticky=(tk.W, tk.E), pady=10)
-
-        # Container para informações (centralizado)
-        info_container = ttk.Frame(main_frame, style='Center.TFrame')
-        info_container.grid(row=2, column=1, sticky=(tk.W, tk.E, tk.N, tk.S), pady=10)
-        info_container.columnconfigure(0, weight=1)
-
-        # Informação sobre níveis de acesso
-        info_frame = ttk.LabelFrame(
-            info_container,
-            text=" ℹ️  Níveis de Acesso",
-            style='Custom.TLabelframe',
-            padding="15"
-        )
-        info_frame.grid(row=0, column=0, sticky=(tk.W, tk.E))
-        info_frame.columnconfigure(0, weight=1)
-
-        levels_info = [
-            ("🎯 Nível 0 - Funcionário", "Acesso básico ao sistema"),
-            ("👤 Nível 1 - Usuário", "Acesso intermediário com mais recursos"),
-            ("👑 Nível 2 - Administrador", "Acesso completo + verificação facial")
-        ]
-
-        for i, (level, desc) in enumerate(levels_info):
-            level_frame = ttk.Frame(info_frame, style='Custom.TFrame')
-            level_frame.grid(row=i, column=0, sticky=(tk.W, tk.E), pady=5)
-
-            ttk.Label(
-                level_frame,
-                text=level,
-                style='Normal.TLabel',
-                font=('Arial', 10, 'bold')
-            ).pack(side=tk.LEFT, anchor='w')
-
-            ttk.Label(
-                level_frame,
-                text=f" - {desc}",
-                style='Normal.TLabel',
-                font=('Arial', 10)
-            ).pack(side=tk.LEFT, anchor='w')
+        login_button.pack(pady=30, padx=20)
 
         # Status
-        status_container = ttk.Frame(main_frame, style='Center.TFrame')
-        status_container.grid(row=3, column=1, sticky=(tk.W, tk.E), pady=10)
-        status_container.columnconfigure(0, weight=1)
+        status_text = "Sistema de Informações Estratégicas"
+        if self.admin_photo_path and os.path.exists(self.admin_photo_path) and self.admin_face_features is not None:
+            status_text += "\n✅ Foto admin configurada: validação facial ativa"
+        else:
+            status_text += "\n⚠️ Foto admin não configurada: usando validação simulada"
 
-        self.status_label = ttk.Label(
-            status_container,
-            text="Digite suas credenciais para acessar o sistema",
-            style='Normal.TLabel',
-            foreground='#bdc3c7'
+        self.status_label = tk.Label(
+            main_frame,
+            text=status_text,
+            font=("Arial", 10),
+            bg=self.colors['background'],
+            fg='#bdc3c7',
+            justify=tk.CENTER
         )
-        self.status_label.grid(row=0, column=0)
+        self.status_label.pack(pady=10)
 
-        # Focar no campo de login e configurar Enter para submeter
+        # Configurar Enter para login
         self.login_entry.focus()
         self.password_entry.bind('<Return>', lambda event: self.standard_auth())
 
-    def create_card(self, parent, title: str, content: list, row: int, column: int) -> None:
-        """Cria um card estilizado para conteúdo"""
-        card = ttk.Frame(parent, style='Card.TFrame', padding="20")
-        card.grid(row=row, column=column, padx=10, pady=10, sticky=(tk.W, tk.E, tk.N, tk.S))
-
-        ttk.Label(
-            card,
-            text=title,
-            style='Normal.TLabel',
-            font=('Arial', 14, 'bold')
-        ).grid(row=0, column=0, sticky=tk.W, pady=(0, 15))
-
-        for i, item in enumerate(content, 1):
-            ttk.Label(
-                card,
-                text=f"• {item}",
-                style='Normal.TLabel',
-                font=('Arial', 11)
-            ).grid(row=i, column=0, sticky=tk.W, pady=2)
-
-        return card
-
     def standard_auth(self) -> None:
-        """Realiza autenticação com login e senha para todos os usuários"""
+        """Autenticação com login e senha"""
         login = self.login_entry.get().strip()
         password = self.password_entry.get()
 
@@ -314,121 +298,112 @@ class FacialAuthSystem:
 
         if login in self.users and self.users[login]["password"] == password:
             level = self.users[login]["level"]
-            self.status_label.config(
-                text=f"✅ Autenticado como {login} - Nível {level}",
-                foreground=self.colors['success']
-            )
 
-            self.root.after(1000, lambda: self.redirect_after_auth(level, login))
+            # Se for nível 3 (ministro), verificar se tem foto configurada
+            if level == 3:
+                if not self.admin_photo_path or not os.path.exists(self.admin_photo_path):
+                    messagebox.showwarning(
+                        "Foto não configurada",
+                        "Foto não configurada.\n\n"
+                        "Usando validação simulada para teste."
+                    )
+                elif self.admin_face_features is None:
+                    messagebox.showwarning(
+                        "Foto inválida",
+                        "Não foi possível processar a foto.\n\n"
+                        "Usando validação simulada para teste."
+                    )
+
+            self.redirect_after_auth(level, login)
         else:
-            self.status_label.config(
-                text="❌ Credenciais inválidas - Tente novamente",
-                foreground=self.colors['danger']
-            )
             messagebox.showerror("Erro", "Credenciais inválidas")
 
     def redirect_after_auth(self, level: int, username: str) -> None:
-        """Redireciona após autenticação bem-sucedida"""
-        if level == 0:
-            self.show_level0_screen(username)
-        elif level == 1:
+        """Redireciona para a tela apropriada"""
+        if level == 1:
             self.show_level1_screen(username)
         elif level == 2:
+            self.show_level2_screen(username)
+        elif level == 3:
             self.start_facial_auth(username)
 
     def start_facial_auth(self, username: str) -> None:
-        """Inicia o processo de autenticação facial com câmera"""
-        # Tela de verificação facial
+        """Inicia validação facial"""
         for widget in self.root.winfo_children():
             widget.destroy()
 
-        auth_frame = ttk.Frame(self.root, style='Custom.TFrame', padding="30")
-        auth_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        main_frame = tk.Frame(self.root, bg=self.colors['background'])
+        main_frame.pack(fill=tk.BOTH, expand=True)
 
-        # Configurar grid para centralização
-        self.root.columnconfigure(0, weight=1)
-        self.root.rowconfigure(0, weight=1)
-        auth_frame.columnconfigure(0, weight=1)
-        auth_frame.columnconfigure(1, weight=1)
-        auth_frame.columnconfigure(2, weight=1)
-        auth_frame.rowconfigure(0, weight=0)  # Cabeçalho
-        auth_frame.rowconfigure(1, weight=0)  # Subtítulo
-        auth_frame.rowconfigure(2, weight=1)  # Câmera
-        auth_frame.rowconfigure(3, weight=0)  # Botões
+        # Header
+        header_frame = tk.Frame(main_frame, bg=self.colors['header_bg'], height=60)
+        header_frame.pack(fill=tk.X)
+        header_frame.pack_propagate(False)
 
-        # Cabeçalho
-        header_frame = ttk.Frame(auth_frame, style='Custom.TFrame')
-        header_frame.grid(row=0, column=1, pady=(0, 20), sticky=(tk.W, tk.E))
-        header_frame.columnconfigure(0, weight=1)
-
-        ttk.Label(
+        tk.Label(
             header_frame,
-            text="👑 ",
-            font=("Arial", 24),
-            background=self.colors['background'],
-            foreground=self.colors['primary']
-        ).grid(row=0, column=0)
+            text="Validação - Nível 3",
+            font=("Arial", 14, "bold"),
+            bg=self.colors['header_bg'],
+            fg='white'
+        ).pack(pady=15)
 
-        ttk.Label(
-            header_frame,
-            text=f"Verificação Facial - {username}",
-            style='Title.TLabel'
-        ).grid(row=1, column=0, pady=5)
+        # Título
+        tk.Label(
+            main_frame,
+            text="Verificação Facial",
+            font=("Arial", 18, "bold"),
+            bg=self.colors['background'],
+            fg='white'
+        ).pack(pady=20)
 
-        # Subtítulo
-        subtitle_frame = ttk.Frame(auth_frame, style='Custom.TFrame')
-        subtitle_frame.grid(row=1, column=1, pady=(0, 20), sticky=(tk.W, tk.E))
-        subtitle_frame.columnconfigure(0, weight=1)
+        # Instruções
+        instructions = "Posicione seu rosto na câmera para validação"
+        if self.admin_face_features is not None:
+            instructions += "\n✅ Comparando com foto cadastrada"
+        else:
+            instructions += "\n⚠️ Usando validação simulada"
 
-        ttk.Label(
-            subtitle_frame,
-            text="🔒 Última etapa: validação facial necessária para acesso administrativo",
-            style='Subtitle.TLabel'
-        ).grid(row=0, column=0)
+        tk.Label(
+            main_frame,
+            text=instructions,
+            font=("Arial", 10),
+            bg=self.colors['background'],
+            fg='#bdc3c7'
+        ).pack(pady=5)
 
-        # Container central para a câmera
-        camera_container = ttk.Frame(auth_frame, style='Custom.TFrame')
-        camera_container.grid(row=2, column=1, sticky=(tk.W, tk.E, tk.N, tk.S), pady=10)
-        camera_container.columnconfigure(0, weight=1)
-        camera_container.rowconfigure(0, weight=1)
-
-        # Card da câmera
-        camera_card = ttk.Frame(camera_container, style='Card.TFrame', padding="15")
-        camera_card.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
-        camera_card.columnconfigure(0, weight=1)
-        camera_card.rowconfigure(0, weight=1)
-
-        # Área de visualização da câmera
-        self.camera_label = ttk.Label(
-            camera_card,
-            text="🎥 Iniciando câmera...\n\nAguardando ativação do dispositivo",
-            background='#1a1a1a',
-            foreground='white',
-            font=('Arial', 12),
-            justify=tk.CENTER
+        # Área da câmera
+        self.camera_label = tk.Label(
+            main_frame,
+            text="Iniciando câmera...",
+            bg='black',
+            fg='white',
+            font=('Arial', 12)
         )
-        self.camera_label.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), padx=50, pady=50)
+        self.camera_label.pack(pady=20, padx=50, fill=tk.BOTH, expand=True)
 
-        # Container central para botões
-        buttons_container = ttk.Frame(auth_frame, style='Custom.TFrame')
-        buttons_container.grid(row=3, column=1, pady=20, sticky=(tk.W, tk.E))
-        buttons_container.columnconfigure(0, weight=1)
+        # Botões
+        button_frame = tk.Frame(main_frame, bg=self.colors['background'])
+        button_frame.pack(pady=20)
 
-        buttons_frame = ttk.Frame(buttons_container, style='Custom.TFrame')
-        buttons_frame.grid(row=0, column=0)
-
-        ttk.Button(
-            buttons_frame,
-            text="📷 Validar Rosto",
+        tk.Button(
+            button_frame,
+            text="Validar Rosto",
             command=self.validate_face,
-            style='Primary.TButton'
+            bg=self.colors['warning'],
+            fg='white',
+            font=("Arial", 10, "bold"),
+            padx=20
         ).pack(side=tk.LEFT, padx=10)
 
-        ttk.Button(
-            buttons_frame,
-            text="↩️ Voltar ao Login",
+        tk.Button(
+            button_frame,
+            text="Voltar ao Login",
             command=self.show_login_screen,
-            style='Secondary.TButton'
+            bg=self.colors['card_bg'],
+            fg='white',
+            font=("Arial", 10),
+            padx=20
         ).pack(side=tk.LEFT, padx=10)
 
         # Iniciar câmera
@@ -445,7 +420,7 @@ class FacialAuthSystem:
         self.video_thread.start()
 
     def update_frame(self) -> None:
-        """Atualiza o frame da câmera em tempo real"""
+        """Atualiza o frame da câmera"""
         while self.capturing:
             ret, frame = self.cap.read()
             if ret:
@@ -453,275 +428,396 @@ class FacialAuthSystem:
                     # Converter BGR para RGB
                     frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
-                    # Detectar rostos
-                    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-                    faces = self.face_cascade.detectMultiScale(gray, 1.1, 4)
+                    # Detectar rostos se o classificador estiver carregado
+                    if self.face_cascade is not None:
+                        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                        faces = self.face_cascade.detectMultiScale(gray, 1.1, 4, minSize=(100, 100))
 
-                    # Desenhar retângulos nos rostos detectados
-                    for (x, y, w, h) in faces:
-                        cv2.rectangle(frame_rgb, (x, y), (x + w, y + h), (0, 255, 0), 3)
-                        cv2.putText(frame_rgb, 'Rosto Detectado', (x, y - 10),
-                                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+                        # Desenhar retângulos nos rostos
+                        for (x, y, w, h) in faces:
+                            cv2.rectangle(frame_rgb, (x, y), (x + w, y + h), (0, 255, 0), 2)
 
-                    # Armazenar frame atual para validação
-                    self.current_frame = frame
+                    # Armazenar frame atual
+                    self.current_frame = frame.copy()
 
                     # Redimensionar e converter para ImageTk
                     frame_rgb = cv2.resize(frame_rgb, (640, 480))
                     img = Image.fromarray(frame_rgb)
                     imgtk = ImageTk.PhotoImage(image=img)
 
-                    # Atualizar a interface na thread principal
-                    self.root.after(0, self.update_camera_label, imgtk)
+                    # Atualizar interface
+                    self.camera_label.imgtk = imgtk
+                    self.camera_label.configure(image=imgtk)
 
                 except Exception as e:
-                    print(f"Erro ao processar frame: {e}")
+                    print(f"Erro no frame: {e}")
 
             time.sleep(0.03)
 
-    def update_camera_label(self, imgtk: ImageTk.PhotoImage) -> None:
-        """Atualiza o label da câmera (deve ser chamado na thread principal)"""
-        self.camera_label.imgtk = imgtk
-        self.camera_label.configure(image=imgtk)
-
     def validate_face(self) -> None:
-        """Valida o rosto detectado"""
+        """Valida o rosto comparando com a foto do ministro/admin"""
         if self.current_frame is None:
             messagebox.showerror("Erro", "Nenhuma imagem capturada")
             return
 
         try:
-            # Converter para escala de cinza para detecção
+            # Verificar se há rostos na imagem
+            if self.face_cascade is None:
+                messagebox.showerror("Erro", "Sistema de detecção não disponível")
+                return
+
             gray = cv2.cvtColor(self.current_frame, cv2.COLOR_BGR2GRAY)
-            faces = self.face_cascade.detectMultiScale(gray, 1.1, 4)
+            faces = self.face_cascade.detectMultiScale(gray, 1.1, 4, minSize=(100, 100))
 
-            if len(faces) > 0:
-                # Atualizar interface para mostrar processamento
-                self.camera_label.config(
-                    text="🔍 Processando verificação facial...\n\nAguarde...",
-                    image=''
-                )
-
-                # Simular processo de validação
-                self.root.after(2000, lambda: self.finish_face_validation(len(faces) > 0))
-            else:
+            if len(faces) == 0:
                 messagebox.showerror("Erro", "Nenhum rosto detectado na imagem")
+                return
+
+            # Se tem características do ministro/admin, fazer comparação real
+            if self.admin_face_features is not None:
+                x, y, w, h = faces[0]
+                # Recortar o rosto
+                face_roi = gray[y:y + h, x:x + w]
+
+                # Extrair características do rosto capturado
+                current_features = self.extract_face_features(face_roi)
+
+                if not current_features:
+                    messagebox.showerror("Erro", "Não foi possível extrair características do rosto")
+                    return
+
+                # Comparar com as características do ministro
+                similarity = self.compare_faces(self.admin_face_features, current_features)
+
+                print(f"Similaridade detectada: {similarity:.3f}")
+
+                # Threshold para considerar match
+                if similarity > 0.4:
+                    messagebox.showinfo("Sucesso",
+                                        f"✅ Validação facial confirmada!\nSimilaridade: {similarity:.3f}\nAcesso concedido ao painel ministerial.")
+                    self.stop_camera()
+                    self.show_level3_screen("Ministro")
+                else:
+                    messagebox.showerror("Falha",
+                                         f"❌ Rosto não corresponde ao cadastro.\nSimilaridade: {similarity:.3f}\nAcesso negado.")
+            else:
+                # Validação simulada (fallback)
+                self.simulated_face_validation()
 
         except Exception as e:
-            messagebox.showerror("Erro", f"Falha no processamento facial: {e}")
+            messagebox.showerror("Erro", f"Erro na validação facial: {e}")
 
-    def finish_face_validation(self, face_detected: bool) -> None:
-        """Finaliza a validação facial"""
-        if face_detected:
-            success = np.random.random() > 0.2  # 80% de chance de sucesso
+    def simulated_face_validation(self) -> None:
+        """Validação facial simulada (fallback)"""
+        try:
+            if self.face_cascade is not None and self.current_frame is not None:
+                gray = cv2.cvtColor(self.current_frame, cv2.COLOR_BGR2GRAY)
+                faces = self.face_cascade.detectMultiScale(gray, 1.1, 4, minSize=(100, 100))
 
-            if success:
-                messagebox.showinfo("Sucesso", "✅ Rosto validado com sucesso!")
-                self.capturing = False
-                if self.cap and self.cap.isOpened():
-                    self.cap.release()
-                self.show_admin_screen()
+                if len(faces) > 0:
+                    # Simular processamento
+                    self.camera_label.config(text="Validando identidade...")
+                    self.root.update()
+                    time.sleep(2)
+
+                    # 80% de chance de sucesso
+                    success = np.random.random() > 0.2
+
+                    if success:
+                        messagebox.showinfo("Sucesso", "✅ Validação simulada: Identidade confirmada!")
+                        self.stop_camera()
+                        self.show_level3_screen("Ministro")
+                    else:
+                        messagebox.showerror("Falha", "❌ Validação: Falha na verificação. Tente novamente.")
+                        self.camera_label.config(text="Câmera ativa")
+                else:
+                    messagebox.showerror("Erro", "Nenhum rosto detectado")
             else:
-                messagebox.showerror("Falha", "❌ Falha na validação facial. Tente novamente.")
-                # Restaurar a visualização da câmera
-                self.capturing = True
-                self.video_thread = threading.Thread(target=self.update_frame, daemon=True)
-                self.video_thread.start()
+                messagebox.showerror("Erro", "Sistema de detecção não disponível")
 
-    def show_level0_screen(self, username: str) -> None:
-        """Exibe a tela de nível 0 (Funcionário) com design moderno"""
-        for widget in self.root.winfo_children():
-            widget.destroy()
+        except Exception as e:
+            messagebox.showerror("Erro", f"Erro na validação simulada: {e}")
 
-        main_frame = ttk.Frame(self.root, style='Custom.TFrame', padding="30")
-        main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+    def stop_camera(self) -> None:
+        """Para a captura da câmera"""
+        self.capturing = False
+        if self.cap and self.cap.isOpened():
+            self.cap.release()
+        self.current_frame = None
 
-        self.root.columnconfigure(0, weight=1)
-        self.root.rowconfigure(0, weight=1)
-        main_frame.columnconfigure(0, weight=1)
-        main_frame.columnconfigure(1, weight=1)
-        main_frame.columnconfigure(2, weight=1)
+    def create_folder_widget(self, parent, name, color='#3498db'):
+        """Cria um widget de pasta"""
+        folder_frame = tk.Frame(parent, bg=color, relief='raised', bd=1, width=120, height=100)
+        folder_frame.pack_propagate(False)
 
-        # Cabeçalho
-        header_frame = ttk.Frame(main_frame, style='Custom.TFrame')
-        header_frame.grid(row=0, column=1, pady=(0, 30), sticky=(tk.W, tk.E))
-        header_frame.columnconfigure(0, weight=1)
-
-        ttk.Label(
-            header_frame,
-            text="🎯 ",
+        tk.Label(
+            folder_frame,
+            text="📁",
             font=("Arial", 24),
-            background=self.colors['background'],
-            foreground=self.colors['primary']
-        ).grid(row=0, column=0)
+            bg=color,
+            fg='white'
+        ).pack(pady=(15, 5))
 
-        ttk.Label(
-            header_frame,
-            text="Painel do Funcionário",
-            style='Title.TLabel'
-        ).grid(row=1, column=0, pady=5)
+        tk.Label(
+            folder_frame,
+            text=name,
+            font=("Arial", 9),
+            bg=color,
+            fg='white',
+            wraplength=100,
+            justify=tk.CENTER
+        ).pack(pady=(0, 10))
 
-        ttk.Label(
-            header_frame,
-            text=f"(Nível 0) - {username}",
-            style='Subtitle.TLabel'
-        ).grid(row=2, column=0, pady=5)
-
-        # Conteúdo
-        content_container = ttk.Frame(main_frame, style='Custom.TFrame')
-        content_container.grid(row=1, column=1, sticky=(tk.W, tk.E, tk.N, tk.S), pady=20)
-        content_container.columnconfigure(0, weight=1)
-
-        content_frame = ttk.Frame(content_container, style='Custom.TFrame')
-        content_frame.grid(row=0, column=0, sticky=(tk.W, tk.E))
-        content_frame.columnconfigure(0, weight=1)
-        content_frame.columnconfigure(1, weight=1)
-
-        recursos = [
-            "Visualizar dados de entrada",
-            "Consultar informações básicas",
-            "Acessar relatórios simples",
-            "Registrar ponto eletrônico",
-            "Visualizar calendário corporativo",
-            "Solicitar férias"
-        ]
-        self.create_card(content_frame, "📊 Recursos Disponíveis", recursos, 0, 0)
-
-        # Card de informações
-        info = [
-            "Acesso básico ao sistema",
-            "Permissões limitadas",
-            "Horário comercial: 08:00-18:00",
-            "Suporte: interno@empresa.com"
-        ]
-        self.create_card(content_frame, "ℹ️ Informações", info, 0, 1)
-
-        # Botão de sair
-        button_container = ttk.Frame(main_frame, style='Custom.TFrame')
-        button_container.grid(row=2, column=1, pady=30, sticky=(tk.W, tk.E))
-        button_container.columnconfigure(0, weight=1)
-
-        ttk.Button(
-            button_container,
-            text="🚪 Sair do Sistema",
-            command=self.show_login_screen,
-            style='Secondary.TButton'
-        ).grid(row=0, column=0)
+        return folder_frame
 
     def show_level1_screen(self, username: str) -> None:
-        """Exibe a tela de nível 1 (Usuário Autenticado)"""
-        # Implementação similar ao nível 0
+        """Tela do funcionário - Nível 1 (Acesso Público)"""
+        self.stop_camera()
         for widget in self.root.winfo_children():
             widget.destroy()
 
-        main_frame = ttk.Frame(self.root, style='Custom.TFrame', padding="30")
-        main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        main_frame = tk.Frame(self.root, bg=self.colors['background'])
+        main_frame.pack(fill=tk.BOTH, expand=True)
 
-        self.root.columnconfigure(0, weight=1)
-        self.root.rowconfigure(0, weight=1)
-        main_frame.columnconfigure(0, weight=1)
-        main_frame.columnconfigure(1, weight=1)
-        main_frame.columnconfigure(2, weight=1)
+        # Header
+        header_frame = tk.Frame(main_frame, bg=self.colors['primary'], height=70)
+        header_frame.pack(fill=tk.X)
+        header_frame.pack_propagate(False)
 
-        # Cabeçalho
-        header_frame = ttk.Frame(main_frame, style='Custom.TFrame')
-        header_frame.grid(row=0, column=1, pady=(0, 30), sticky=(tk.W, tk.E))
-        header_frame.columnconfigure(0, weight=1)
-
-        ttk.Label(
+        tk.Label(
             header_frame,
-            text="👤 ",
-            font=("Arial", 24),
-            background=self.colors['background'],
-            foreground=self.colors['primary']
-        ).grid(row=0, column=0)
+            text=f"Painel do Funcionário - {username}",
+            font=("Arial", 16, "bold"),
+            bg=self.colors['primary'],
+            fg='white'
+        ).pack(side=tk.LEFT, padx=20, pady=20)
 
-        ttk.Label(
+        tk.Button(
             header_frame,
-            text="Painel do Usuário",
-            style='Title.TLabel'
-        ).grid(row=1, column=0, pady=5)
-
-        ttk.Label(
-            header_frame,
-            text=f"(Nível 1) - {username}",
-            style='Subtitle.TLabel'
-        ).grid(row=2, column=0, pady=5)
+            text="Sair",
+            command=self.show_login_screen,
+            bg=self.colors['danger'],
+            fg='white',
+            font=("Arial", 10, "bold"),
+            padx=15
+        ).pack(side=tk.RIGHT, padx=20, pady=20)
 
         # Conteúdo
-        content_container = ttk.Frame(main_frame, style='Custom.TFrame')
-        content_container.grid(row=1, column=1, sticky=(tk.W, tk.E, tk.N, tk.S), pady=20)
-        content_container.columnconfigure(0, weight=1)
+        content_frame = tk.Frame(main_frame, bg=self.colors['background'])
+        content_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
 
-        # Botão
-        button_container = ttk.Frame(main_frame, style='Custom.TFrame')
-        button_container.grid(row=2, column=1, pady=30, sticky=(tk.W, tk.E))
-        button_container.columnconfigure(0, weight=1)
+        # Título da seção
+        tk.Label(
+            content_frame,
+            text="INFORMAÇÕES DE NÍVEL 1 - ACESSO PÚBLICO",
+            font=("Arial", 14, "bold"),
+            bg=self.colors['background'],
+            fg='white'
+        ).pack(pady=(0, 20))
 
-        ttk.Button(
-            button_container,
-            text="🚪 Sair do Sistema",
-            command=self.show_login_screen,
-            style='Secondary.TButton'
-        ).grid(row=0, column=0)
+        # Grid de pastas
+        folders_frame = tk.Frame(content_frame, bg=self.colors['background'])
+        folders_frame.pack(fill=tk.BOTH, expand=True)
 
-    def show_admin_screen(self) -> None:
-        """Exibe a tela de nível 2 (Administrador)"""
-        # Implementação similar
+        # Pastas do nível 1
+        folders_level1 = [
+            ("Relatórios Públicos", "Relatórios anuais de monitoramento"),
+            ("Legislação Ambiental", "Leis e regulamentos públicos"),
+            ("Dados Abertos", "Dados públicos de qualidade da água"),
+            ("Educação Ambiental", "Materiais educativos e campanhas"),
+            ("Licenciamentos", "Processos de licenciamento ambiental"),
+            ("Fiscalização", "Ações de fiscalização registradas")
+        ]
+
+        for i, (name, desc) in enumerate(folders_level1):
+            row = i // 3
+            col = i % 3
+            folder = self.create_folder_widget(folders_frame, name, '#27ae60')
+            folder.grid(row=row, column=col, padx=10, pady=10, sticky='nsew')
+
+            # Tooltip
+            self.create_tooltip(folder, desc)
+
+        # Configurar grid
+        for i in range(3):
+            folders_frame.columnconfigure(i, weight=1)
+        for i in range(2):
+            folders_frame.rowconfigure(i, weight=1)
+
+    def show_level2_screen(self, username: str) -> None:
+        """Tela do diretor - Nível 2 (Acesso Restrito)"""
+        self.stop_camera()
         for widget in self.root.winfo_children():
             widget.destroy()
 
-        main_frame = ttk.Frame(self.root, style='Custom.TFrame', padding="30")
-        main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        main_frame = tk.Frame(self.root, bg=self.colors['background'])
+        main_frame.pack(fill=tk.BOTH, expand=True)
 
-        self.root.columnconfigure(0, weight=1)
-        self.root.rowconfigure(0, weight=1)
-        main_frame.columnconfigure(0, weight=1)
-        main_frame.columnconfigure(1, weight=1)
-        main_frame.columnconfigure(2, weight=1)
+        # Header
+        header_frame = tk.Frame(main_frame, bg=self.colors['warning'], height=70)
+        header_frame.pack(fill=tk.X)
+        header_frame.pack_propagate(False)
 
-        header_frame = ttk.Frame(main_frame, style='Custom.TFrame')
-        header_frame.grid(row=0, column=1, pady=(0, 30), sticky=(tk.W, tk.E))
-        header_frame.columnconfigure(0, weight=1)
-
-        ttk.Label(
+        tk.Label(
             header_frame,
-            text="👑 ",
-            font=("Arial", 24),
-            background=self.colors['background'],
-            foreground=self.colors['primary']
-        ).grid(row=0, column=0)
+            text=f"Painel do Diretor - {username}",
+            font=("Arial", 16, "bold"),
+            bg=self.colors['warning'],
+            fg='white'
+        ).pack(side=tk.LEFT, padx=20, pady=20)
 
-        ttk.Label(
+        tk.Button(
             header_frame,
-            text="Painel de Administração",
-            style='Title.TLabel'
-        ).grid(row=1, column=0, pady=5)
-
-        ttk.Label(
-            header_frame,
-            text="(Nível 2) - Acesso Completo",
-            style='Subtitle.TLabel'
-        ).grid(row=2, column=0, pady=5)
-
-        button_container = ttk.Frame(main_frame, style='Custom.TFrame')
-        button_container.grid(row=2, column=1, pady=30, sticky=(tk.W, tk.E))
-        button_container.columnconfigure(0, weight=1)
-
-        ttk.Button(
-            button_container,
-            text="🚪 Sair do Sistema",
+            text="Sair",
             command=self.show_login_screen,
-            style='Secondary.TButton'
-        ).grid(row=0, column=0)
+            bg=self.colors['danger'],
+            fg='white',
+            font=("Arial", 10, "bold"),
+            padx=15
+        ).pack(side=tk.RIGHT, padx=20, pady=20)
+
+        # Conteúdo
+        content_frame = tk.Frame(main_frame, bg=self.colors['background'])
+        content_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
+
+        # Título da seção
+        tk.Label(
+            content_frame,
+            text="INFORMAÇÕES DE NÍVEL 2 - ACESSO RESTRITO A DIRETORES",
+            font=("Arial", 14, "bold"),
+            bg=self.colors['background'],
+            fg='white'
+        ).pack(pady=(0, 20))
+
+        # Grid de pastas
+        folders_frame = tk.Frame(content_frame, bg=self.colors['background'])
+        folders_frame.pack(fill=tk.BOTH, expand=True)
+
+        # Pastas do nível 2
+        folders_level2 = [
+            ("Propriedades Monitoradas", "Lista de propriedades sob investigação"),
+            ("Agrotóxicos Proibidos", "Relatório de substâncias banidas"),
+            ("Contaminações Detectadas", "Casos confirmados de contaminação"),
+            ("Ações Corretivas", "Planos de ação e medidas tomadas"),
+            ("Relatórios Internos", "Análises técnicas internas"),
+            ("Alertas Regionais", "Áreas com alto risco de contaminação")
+        ]
+
+        for i, (name, desc) in enumerate(folders_level2):
+            row = i // 3
+            col = i % 3
+            folder = self.create_folder_widget(folders_frame, name, '#f39c12')
+            folder.grid(row=row, column=col, padx=10, pady=10, sticky='nsew')
+
+            # Tooltip
+            self.create_tooltip(folder, desc)
+
+        # Configurar grid
+        for i in range(3):
+            folders_frame.columnconfigure(i, weight=1)
+        for i in range(2):
+            folders_frame.rowconfigure(i, weight=1)
+
+    def show_level3_screen(self, username: str) -> None:
+        """Tela do ministro - Nível 3 (Acesso Máximo)"""
+        self.stop_camera()
+        for widget in self.root.winfo_children():
+            widget.destroy()
+
+        main_frame = tk.Frame(self.root, bg=self.colors['background'])
+        main_frame.pack(fill=tk.BOTH, expand=True)
+
+        # Header
+        header_frame = tk.Frame(main_frame, bg=self.colors['danger'], height=70)
+        header_frame.pack(fill=tk.X)
+        header_frame.pack_propagate(False)
+
+        tk.Label(
+            header_frame,
+            text=f"Painel Ministerial - {username}",
+            font=("Arial", 16, "bold"),
+            bg=self.colors['danger'],
+            fg='white'
+        ).pack(side=tk.LEFT, padx=20, pady=20)
+
+        tk.Button(
+            header_frame,
+            text="Sair",
+            command=self.show_login_screen,
+            bg=self.colors['primary'],
+            fg='white',
+            font=("Arial", 10, "bold"),
+            padx=15
+        ).pack(side=tk.RIGHT, padx=20, pady=20)
+
+        # Conteúdo
+        content_frame = tk.Frame(main_frame, bg=self.colors['background'])
+        content_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
+
+        # Título da seção
+        tk.Label(
+            content_frame,
+            text="INFORMAÇÕES DE NÍVEL 3 - ACESSO EXCLUSIVO MINISTERIAL",
+            font=("Arial", 14, "bold"),
+            bg=self.colors['background'],
+            fg='white'
+        ).pack(pady=(0, 20))
+
+        # Grid de pastas
+        folders_frame = tk.Frame(content_frame, bg=self.colors['background'])
+        folders_frame.pack(fill=tk.BOTH, expand=True)
+
+        # Pastas do nível 3
+        folders_level3 = [
+            ("Relatórios Estratégicos", "Análises de impacto nacional"),
+            ("Operações Especiais", "Operações sigilosas em andamento"),
+            ("Dados Sensíveis", "Informações classificadas como secretas"),
+            ("Investigação MP", "Acompanhamento de ações do Ministério Público"),
+            ("Crise Hídrica", "Plano de contingência para desastres"),
+            ("Acordos Internacionais", "Tratados e acordos ambientais")
+        ]
+
+        for i, (name, desc) in enumerate(folders_level3):
+            row = i // 3
+            col = i % 3
+            folder = self.create_folder_widget(folders_frame, name, '#e74c3c')
+            folder.grid(row=row, column=col, padx=10, pady=10, sticky='nsew')
+
+            # Tooltip
+            self.create_tooltip(folder, desc)
+
+        # Configurar grid
+        for i in range(3):
+            folders_frame.columnconfigure(i, weight=1)
+        for i in range(2):
+            folders_frame.rowconfigure(i, weight=1)
+
+    def create_tooltip(self, widget, text):
+        """Cria um tooltip para os widgets"""
+
+        def on_enter(event):
+            tooltip = tk.Toplevel()
+            tooltip.wm_overrideredirect(True)
+            tooltip.wm_geometry(f"+{event.x_root + 10}+{event.y_root + 10}")
+
+            label = tk.Label(tooltip, text=text, background="#ffffe0", relief='solid', borderwidth=1)
+            label.pack()
+
+            widget.tooltip = tooltip
+
+        def on_leave(event):
+            if hasattr(widget, 'tooltip'):
+                widget.tooltip.destroy()
+
+        widget.bind("<Enter>", on_enter)
+        widget.bind("<Leave>", on_leave)
 
     def run(self) -> None:
         """Executa a aplicação"""
         try:
             self.root.mainloop()
         finally:
-            if self.cap and self.cap.isOpened():
-                self.cap.release()
+            self.stop_camera()
 
 
 # Executar a aplicação
