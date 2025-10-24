@@ -20,7 +20,6 @@ class FacialAuthSystem:
         # Centralizar a janela
         self.center_window()
 
-        # Configurar estilo
         self.setup_custom_style()
 
         # Dados de usuários
@@ -176,7 +175,7 @@ class FacialAuthSystem:
         self.root.geometry(f'{width}x{height}+{x}+{y}')
 
     def setup_custom_style(self) -> None:
-        """Configura estilos personalizados"""
+        """Configura estilos"""
         style = ttk.Style()
         style.theme_use('clam')
 
@@ -299,7 +298,7 @@ class FacialAuthSystem:
         if login in self.users and self.users[login]["password"] == password:
             level = self.users[login]["level"]
 
-            # Se for nível 3 (ministro), verificar se tem foto configurada
+            # Se for nível 3 (admin), verificar se tem foto configurada
             if level == 3:
                 if not self.admin_photo_path or not os.path.exists(self.admin_photo_path):
                     messagebox.showwarning(
@@ -335,7 +334,7 @@ class FacialAuthSystem:
         main_frame = tk.Frame(self.root, bg=self.colors['background'])
         main_frame.pack(fill=tk.BOTH, expand=True)
 
-        # Header
+        # Cabeçalho
         header_frame = tk.Frame(main_frame, bg=self.colors['header_bg'], height=60)
         header_frame.pack(fill=tk.X)
         header_frame.pack_propagate(False)
@@ -473,7 +472,7 @@ class FacialAuthSystem:
                 messagebox.showerror("Erro", "Nenhum rosto detectado na imagem")
                 return
 
-            # Se tem características do ministro/admin, fazer comparação real
+            # Se tem características do admin, fazer comparação real
             if self.admin_face_features is not None:
                 x, y, w, h = faces[0]
                 # Recortar o rosto
@@ -486,12 +485,12 @@ class FacialAuthSystem:
                     messagebox.showerror("Erro", "Não foi possível extrair características do rosto")
                     return
 
-                # Comparar com as características do ministro
+                # Comparar com as características
                 similarity = self.compare_faces(self.admin_face_features, current_features)
 
                 print(f"Similaridade detectada: {similarity:.3f}")
 
-                # Threshold para considerar match
+                # MUDE AQUI PARA O DETECTOR NÃO SER MUITO ESPECÍFICO NA HORA DA VALIDAÇÃO
                 if similarity > 0.4:
                     messagebox.showinfo("Sucesso",
                                         f"✅ Validação facial confirmada!\nSimilaridade: {similarity:.3f}\nAcesso concedido ao painel ministerial.")
@@ -501,14 +500,14 @@ class FacialAuthSystem:
                     messagebox.showerror("Falha",
                                          f"❌ Rosto não corresponde ao cadastro.\nSimilaridade: {similarity:.3f}\nAcesso negado.")
             else:
-                # Validação simulada (fallback)
+                # Validação simulada
                 self.simulated_face_validation()
 
         except Exception as e:
             messagebox.showerror("Erro", f"Erro na validação facial: {e}")
 
     def simulated_face_validation(self) -> None:
-        """Validação facial simulada (fallback)"""
+        """Validação facial simulada"""
         try:
             if self.face_cascade is not None and self.current_frame is not None:
                 gray = cv2.cvtColor(self.current_frame, cv2.COLOR_BGR2GRAY)
@@ -520,7 +519,7 @@ class FacialAuthSystem:
                     self.root.update()
                     time.sleep(2)
 
-                    # 80% de chance de sucesso
+                    # 80% de chance de sucesso, mude aqui para o detector ser mais específico
                     success = np.random.random() > 0.2
 
                     if success:
@@ -727,7 +726,7 @@ class FacialAuthSystem:
         main_frame = tk.Frame(self.root, bg=self.colors['background'])
         main_frame.pack(fill=tk.BOTH, expand=True)
 
-        # Header
+        # Cabeçalho
         header_frame = tk.Frame(main_frame, bg=self.colors['danger'], height=70)
         header_frame.pack(fill=tk.X)
         header_frame.pack_propagate(False)
